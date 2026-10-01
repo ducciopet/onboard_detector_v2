@@ -1,0 +1,84 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>onboard_detector_v2</name>
+  <version>0.1.0</version>
+  <description>
+    Ground-up rewrite of onboard_detector, built one stage at a time (see
+    README.md for the phase plan). onboard_detector itself is untouched and
+    stays the deployed package until a given stage here is proven out.
+  </description>
+
+  <maintainer email="duccio.petreni@student.unisi.it">ducciopet</maintainer>
+  <license>MIT</license>
+
+  <!-- Build system -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- Phase 1 (preprocessing + calibration) dependencies. Add more here as
+       later phases are built (detection/segmentation, tracking+
+       classification), mirroring onboard_detector/package.xml rather than
+       front-loading everything now. -->
+  <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>visualization_msgs</depend>
+  <depend>cv_bridge</depend>
+  <depend>message_filters</depend>
+  <depend>image_transport</depend>
+  <depend>pcl_conversions</depend>
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2_geometry_msgs</depend>
+
+  <!-- RealSense's own depth<->color extrinsics message (distinct from our
+       lidar<->camera ICP calibration). See preprocessing_node.cpp's file
+       header for the "not verified against a real build yet" caveat. -->
+  <depend>realsense2_camera_msgs</depend>
+
+  <!-- GICP-based depth<->lidar registration for calibration_icp_node (ported
+       from onboard_detector). Provided by the same gtsam/gtsam_points
+       install the glim submodule requires (see docker/Dockerfile); no
+       rosdep key here, matching onboard_detector/package.xml and
+       glim/package.xml which also resolve it outside rosdep. -->
+  <depend>eigen</depend>
+
+  <!-- PCL -->
+  <depend>pcl_ros</depend>
+
+  <!-- compressed/compressedDepth image_transport plugins: not linked
+       against directly (image_transport loads them via pluginlib at
+       runtime), but required for the "compressed"/"compressedDepth"
+       transport hints to resolve. Already installed via
+       image-transport-plugins in docker/Dockerfile. -->
+  <exec_depend>compressed_image_transport</exec_depend>
+  <exec_depend>compressed_depth_image_transport</exec_depend>
+
+  <!-- calibration_icp_node's default depth_transport launch arg is 'zstd'
+       (matches bags/*_validation_lab, which only records aligned depth
+       that way — see run_calibration_icp.launch.py). Was missing from
+       docker/Dockerfile until this port; added there too. -->
+  <exec_depend>zstd_image_transport</exec_depend>
+
+  <!-- Phase 2: yolo_seg_track_detector.py (segmentation + tracking
+       prototype). vision_msgs for Detection2D/Detection2DArray output;
+       torch/ultralytics/opencv are pip-installed in docker/Dockerfile (not
+       resolved via rosdep), matching onboard_detector/package.xml's own
+       yolo_detector, which has no rosdep entries for them either. -->
+  <depend>vision_msgs</depend>
+
+  <!-- jo_msgs/ObstacleArray: tracker_node's own pub_obstacles_, the pre-existing stable interface
+       glim_ros2's BBOX dynamic-rejection mode already subscribes to (see its own comment). -->
+  <depend>jo_msgs</depend>
+
+  <!-- preprocessing_node/dbscan_detector_node both resolve cfg/coco.names (the same class list the YOLO
+       detection nodes use) against the package share directory, to turn a YOLO class NAME into a small numeric
+       index that fits a PointCloud2 field and back — see preprocessing_node.cpp's publishSemanticLeaves. -->
+  <depend>ament_index_cpp</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+
+</package>

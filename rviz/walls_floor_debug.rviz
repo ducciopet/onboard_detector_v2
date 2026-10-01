@@ -1,0 +1,364 @@
+Panels:
+  - Class: rviz_common/Displays
+    Help Height: 78
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Global Options1
+        - /Status1
+        - /Wall Points1
+        - /Floor Points (front)1
+        - /Floor Points (back)1
+        - /GSeg3D LiDAR Ground1
+        - /Wall + Floor Boxes1
+      Splitter Ratio: 0.5
+    Tree Height: 650
+  - Class: rviz_common/Selection
+    Name: Selection
+  - Class: rviz_common/Tool Properties
+    Expanded:
+      - /2D Goal Pose1
+      - /Publish Point1
+    Name: Tool Properties
+    Splitter Ratio: 0.5
+  - Class: rviz_common/Views
+    Expanded:
+      - /Current View1
+    Name: Views
+    Splitter Ratio: 0.5
+  - Class: rviz_common/Time
+    Experimental: false
+    Name: Time
+    SyncMode: 0
+    SyncSource: Wall Points
+Visualization Manager:
+  Class: ""
+  Displays:
+    # -----------------------------------------------------------
+    # Grid + TF
+    # -----------------------------------------------------------
+    - Alpha: 0.5
+      Cell Size: 1
+      Class: rviz_default_plugins/Grid
+      Color: 160; 160; 160
+      Enabled: true
+      Line Style:
+        Line Width: 0.029999999329447746
+        Value: Lines
+      Name: Grid
+      Normal Cell Count: 0
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0
+      Plane: XY
+      Plane Cell Count: 100
+      Reference Frame: <Fixed Frame>
+      Value: true
+    - Class: rviz_default_plugins/TF
+      Enabled: false
+      Frame Timeout: 15
+      Frames:
+        All Enabled: true
+      Marker Scale: 0.5
+      Name: TF
+      Show Arrows: true
+      Show Axes: true
+      Show Names: true
+      Update Interval: 0
+      Value: false
+
+    # -----------------------------------------------------------
+    # LiDAR original — dim background reference, same as
+    # preprocessing_debug.rviz's own copy, so wall points/boxes below have
+    # spatial context without pulling in the rest of that config's clutter.
+    # -----------------------------------------------------------
+    - Alpha: 0.15
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds:
+        Max Value: 10
+        Min Value: -1
+        Value: true
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz_default_plugins/PointCloud2
+      Color: 190; 190; 190
+      Color Transformer: FlatColor
+      Decay Time: 0
+      Enabled: true
+      Invert Rainbow: false
+      Max Color: 255; 255; 255
+      Min Color: 0; 0; 0
+      Name: LiDAR (context)
+      Position Transformer: XYZ
+      Selectable: false
+      Size (Pixels): 1
+      Size (m): 0.019999999552965164
+      Style: Points
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /velodyne_points
+      Use Fixed Frame: true
+      Use rainbow: true
+      Value: true
+
+    # -----------------------------------------------------------
+    # Wall points — raw RANSAC inlier points behind wall_markers' ns=
+    # "wall_bbox" boxes (static_structures_node.cpp's DetectionResult::
+    # wall_points_global, LiDAR only, every wall plane this scan combined —
+    # see that file's onLidarVoxelized). Not tracked/merged — every scan's
+    # own detection, republished as-is.
+    # -----------------------------------------------------------
+    - Alpha: 1
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds:
+        Max Value: 10
+        Min Value: -1
+        Value: true
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz_default_plugins/PointCloud2
+      Color: 255; 165; 0
+      Color Transformer: FlatColor
+      Decay Time: 0
+      Enabled: true
+      Invert Rainbow: false
+      Max Color: 255; 255; 255
+      Min Color: 0; 0; 0
+      Name: Wall Points
+      Position Transformer: XYZ
+      Selectable: false
+      Size (Pixels): 4
+      Size (m): 0.03999999910593033
+      Style: Flat Squares
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /onboard_detector_v2/static_structures/wall_points
+      Use Fixed Frame: true
+      Use rainbow: true
+      Value: true
+
+    # -----------------------------------------------------------
+    # Floor points — this camera's own raw RANSAC floor-plane inlier points
+    # each callback (DetectionResult::floor_points_global — NOT the
+    # EMA-tracked floor_plane_global slab, its raw per-frame input instead).
+    # One PER CAMERA, same as floor detection itself — see
+    # onCameraVoxelized(). Distinct colors so front/back stay separable.
+    # -----------------------------------------------------------
+    - Alpha: 1
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds:
+        Max Value: 10
+        Min Value: -1
+        Value: true
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz_default_plugins/PointCloud2
+      Color: 60; 255; 60
+      Color Transformer: FlatColor
+      Decay Time: 0
+      Enabled: true
+      Invert Rainbow: false
+      Max Color: 255; 255; 255
+      Min Color: 0; 0; 0
+      Name: Floor Points (front)
+      Position Transformer: XYZ
+      Selectable: false
+      Size (Pixels): 4
+      Size (m): 0.03999999910593033
+      Style: Flat Squares
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /onboard_detector_v2/front_camera/floor_points
+      Use Fixed Frame: true
+      Use rainbow: true
+      Value: true
+
+    - Alpha: 1
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds:
+        Max Value: 10
+        Min Value: -1
+        Value: true
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz_default_plugins/PointCloud2
+      Color: 60; 220; 220
+      Color Transformer: FlatColor
+      Decay Time: 0
+      Enabled: true
+      Invert Rainbow: false
+      Max Color: 255; 255; 255
+      Min Color: 0; 0; 0
+      Name: Floor Points (back)
+      Position Transformer: XYZ
+      Selectable: false
+      Size (Pixels): 4
+      Size (m): 0.03999999910593033
+      Style: Flat Squares
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /onboard_detector_v2/back_camera/floor_points
+      Use Fixed Frame: true
+      Use rainbow: true
+      Value: true
+
+    # -----------------------------------------------------------
+    # GSeg3D on LiDAR — same algorithm as Wall/Floor Points above, but
+    # GSeg3D's own grid-based classifier instead of RANSAC, run on the
+    # LiDAR's 360° coverage (static_structures_node.cpp's runGseg3d(), called
+    # from onLidarVoxelized now too — see file header). Reaches ground
+    # neither camera's FOV covers at all (e.g. behind the robot). Yellow so
+    # it stays visually distinct from the RANSAC-based Floor Points above.
+    # -----------------------------------------------------------
+    - Alpha: 0.8
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds:
+        Max Value: 10
+        Min Value: -1
+        Value: true
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz_default_plugins/PointCloud2
+      Color: 255; 255; 0
+      Color Transformer: FlatColor
+      Decay Time: 0
+      Enabled: true
+      Invert Rainbow: false
+      Max Color: 255; 255; 255
+      Min Color: 0; 0; 0
+      Name: GSeg3D LiDAR Ground
+      Position Transformer: XYZ
+      Selectable: false
+      Size (Pixels): 3
+      Size (m): 0.029999999329447746
+      Style: Flat Squares
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /onboard_detector_v2/lidar/gseg3d_ground
+      Use Fixed Frame: true
+      Use rainbow: true
+      Value: true
+
+    # -----------------------------------------------------------
+    # Wall + floor boxes — the SAME wall_markers topic
+    # preprocessing_debug.rviz shows (ns="wall_bbox" tracked wall CUBEs,
+    # ns="floor" per-camera EMA-tracked floor slabs) — context for the raw
+    # points above: compare a point cluster directly against the box/slab
+    # RANSAC actually fit to it.
+    # -----------------------------------------------------------
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Wall + Floor Boxes
+      Namespaces: {}
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /onboard_detector_v2/static_structures/wall_markers
+      Value: true
+
+  Enabled: true
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: odom
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/Interact
+      Hide Inactive Objects: true
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+      Line color: 128; 128; 0
+    - Class: rviz_default_plugins/SetInitialPose
+      Covariance x: 0.25
+      Covariance y: 0.25
+      Covariance yaw: 0.06853891909122467
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /initialpose
+    - Class: rviz_default_plugins/SetGoal
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /goal_pose
+    - Class: rviz_default_plugins/PublishPoint
+      Single click: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /clicked_point
+  Transformation:
+    Current:
+      Class: rviz_default_plugins/TF
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 15
+      Enable Stereo Rendering:
+        Stereo Eye Separation: 0.05999999865889549
+        Stereo Focal Distance: 1
+        Swap Stereo Eyes: false
+        Value: false
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 0
+      Focal Shape Fixed Size: true
+      Focal Shape Size: 0.05000000074505806
+      Invert Z Axis: false
+      Name: Current View
+      Near Clip Distance: 0.009999999776482582
+      Pitch: 0.5
+      Target Frame: <Fixed Frame>
+      Value: Orbit (rviz)
+      Yaw: 3.14
+    Saved: ~
+Window Geometry:
+  Displays:
+    collapsed: false
+  Height: 900
+  Hide Left Dock: false
+  Hide Right Dock: true
+  Selection:
+    collapsed: false
+  Time:
+    collapsed: false
+  Tool Properties:
+    collapsed: false
+  Views:
+    collapsed: true
+  Width: 1400
+  X: 100
+  Y: 100
