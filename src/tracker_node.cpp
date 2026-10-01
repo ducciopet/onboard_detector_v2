@@ -1552,9 +1552,13 @@ private:
             // relative to a track that had been barely moving) apart from plain CLASS CONTAMINATION bleeding in
             // from upstream (same position as always — "jump" small — a long-sitting static object just got
             // mislabeled by dbscan_detector_node's own fusion/refinement, the track's own identity/position was
-            // never actually hijacked).
+            // never actually hijacked). INFO + throttled, not WARN: a track getting classified is routine
+            // operation, not a warning condition — this is a debugging aid (kept at INFO rather than DEBUG so
+            // it's still visible without rebuilding with debug logging enabled), throttled the same way every
+            // other frequent diagnostic in this file is, so continuous operation with heavy track churn can't
+            // flood the log.
             if (was_unclassified && !tr.best_class.empty()) {
-                RCLCPP_WARN(get_logger(),
+                RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 1000,
                     "track #%d: first classification '%s' (hits=%d, stationary_ticks=%d, confirmed=%d) — "
                     "position jump from previous observation = %.2fm, absolute pos=[%.2f,%.2f,%.2f], "
                     "size=[%.2f,%.2f,%.2f] (large+established => likely ID swap; small+established => likely "
