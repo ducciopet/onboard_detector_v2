@@ -367,11 +367,19 @@ double iou2D(const Footprint& a, const Footprint& b) {
 // the denominator to at least `floor` makes the gate compare against a realistic minimum object scale
 // instead of the box's own (possibly tiny, possibly noisy) size — this is what actually protects small
 // objects from spurious match rejection -> fallback to a nearby wrong candidate, not the DBSCAN radius.
+// HORIZONTAL-ONLY, like planarSpeed()'s own vz exclusion (see its own comment): Z is dominated by sensor
+// shadow-cone artifacts, not just in the noise-floor sense that justifies dropping vz from speed, but
+// systematically near the robot — the LiDAR's own near-field blind cone cuts into a close object's own LOWER
+// extent (e.g. a person's legs), shrinking its box's Z size specifically as it gets close, regardless of
+// whether the object itself changed at all. Averaging that into a 3-axis size-difference score (the original
+// (dx+dy+dz)/3) could inflate the match-rejection gate right as an object nears the robot — exactly the worst
+// moment to lose a track. X/Y footprint is comparatively robust to this (the shadow cone acts along Z, not
+// radially), so it alone carries this comparison now, same as every other association-time X/Y-vs-Z split in
+// this file.
 double relSizeDiff(const vision_msgs::msg::BoundingBox3D::_size_type& a, const vision_msgs::msg::BoundingBox3D::_size_type& b, double floor) {
     const double dx = std::abs(a.x - b.x) / std::max({a.x, b.x, floor});
     const double dy = std::abs(a.y - b.y) / std::max({a.y, b.y, floor});
-    const double dz = std::abs(a.z - b.z) / std::max({a.z, b.z, floor});
-    return (dx + dy + dz) / 3.0;
+    return (dx + dy) / 2.0;
 }
 
 struct Track {
@@ -608,13 +616,15 @@ public:
         // nearby static clutter) painting a long-lived static track with a passing person's class.
         first_class_confirm_ticks_ = declare_parameter<int>("track_first_class_confirm_ticks", 2);
         // Established-track motion corroboration (no v1 equivalent — see voteClass()'s own comment): a track
-        // with at least this many matched hits (and still unclassified) uses a LONGER debounce window
-        // (track_first_class_established_confirm_ticks, not the plain one above — too short a window can't
-        // tell real directed walking apart from centroid jitter) and additionally requires NET displacement
-        // across that whole window to clear track_first_class_min_jump (reusing min_natural_motion_dist_'s own
-        // "is this real motion" bar for consistency) before accepting the class.
+        // with at least this many matched hits (and still unclassified) uses its own debounce window
+        // (track_first_class_established_confirm_ticks) and additionally requires NET displacement across
+        // that whole window to clear track_first_class_min_jump (reusing min_natural_motion_dist_'s own "is
+        // this real motion" bar for consistency) before accepting the class — this displacement check, not a
+        // longer tick count, is what actually distinguishes real directed walking from centroid jitter now
+        // that the upstream root cause (a bad leaf occasionally bleeding into nearby static clutter — see
+        // preprocessing_node's own yolo_leaf_valley_fraction/yolo_leaf_depth_tolerance) is fixed at the source.
         first_class_established_hits_ = declare_parameter<int>("track_first_class_established_hits", 10);
-        first_class_established_confirm_ticks_ = declare_parameter<int>("track_first_class_established_confirm_ticks", 5);
+        first_class_established_confirm_ticks_ = declare_parameter<int>("track_first_class_established_confirm_ticks", 2);
         first_class_min_jump_ = declare_parameter<double>("track_first_class_min_jump", 0.08);
 
         // Class-conflict guard against ID swaps (v1's own match_yolo_class_consistency_weight /
@@ -1235,12 +1245,12 @@ private:
     // counts how long the SAME class has been pending, pending_class_start_pos is the raw position when that
     // streak began. For an ESTABLISHED track (hits >= first_class_established_hits_ — a brand-new track is
     // never old enough to trigger any of this, so a genuinely freshly-visible real object is unaffected): the
-    // debounce window is the longer first_class_established_confirm_ticks (not the plain
-    // first_class_confirm_ticks_, a jitter-sized window), and when that many ticks are reached the NET
-    // displacement from pending_class_start_pos to right now must clear first_class_min_jump — if it hasn't,
-    // the window simply restarts from here (not rejected outright: if this IS a real, just-slower-than-usual
-    // person, sustained real motion will eventually clear the bar over a later window; a genuinely static
-    // object sitting in a contamination hot-spot never will, by construction).
+    // debounce window is first_class_established_confirm_ticks (its own tunable, independent of the plain
+    // first_class_confirm_ticks_ above even though both currently default to the same value), and when that
+    // many ticks are reached the NET displacement from pending_class_start_pos to right now must clear
+    // first_class_min_jump — if it hasn't, the window simply restarts from here (not rejected outright: if this
+    // IS a real, just-slower-than-usual person, sustained real motion will eventually clear the bar over a
+    // later window; a genuinely static object sitting in a contamination hot-spot never will, by construction).
     void voteClass(Track& tr, const std::string& cls, const geometry_msgs::msg::Point& cur_pos) const {
         if (cls.empty()) return;
         if (tr.best_class.empty()) {
@@ -1532,6 +1542,7 @@ private:
             tr.last_obs = d.bbox.center.position;
             // LiDAR-only semantic fallback — already resolved GLOBALLY above (one YOLO box -> one detection, not
             // one per track), just look this detection's own result up.
+            const bool had_depth_class = !detectionClass(d).empty();
             std::string eff_class = detectionClass(d);
             if (eff_class.empty()) {
                 if (const auto it = fallback_class.find(static_cast<size_t>(di)); it != fallback_class.end()) {
@@ -1541,6 +1552,17 @@ private:
                         track_ids[ti], eff_class.c_str());
                 }
             }
+            // Did THIS class come from dbscan_detector_node's own direct depth-leaf yolo_refine (had_depth_class,
+            // i.e. detectionClass(d) was already non-empty on arrival) or from tracker_node's own LiDAR-only
+            // pixel-projection fallback (!had_depth_class but eff_class non-empty)? See the first-classification
+            // log's own use of this — the two paths fail differently: the depth-leaf path can pick the WRONG
+            // already-separate fused object outright (its own best-IoU-candidate logic, no merge needed at all),
+            // while the fallback is monocular/depth-blind (pixelCandidates()'s own comment) and can award the
+            // same 2D YOLO box to a competing LiDAR-only detection when the real object isn't itself going
+            // through the fallback (e.g. it has its own depth classification already, in which case the
+            // already-claimed-box exclusion applies — or, if the real object is ALSO fallback-only, the two
+            // compete purely on IoU with no depth to disambiguate them, and the wrong one can still win).
+            const char* class_source = had_depth_class ? "depth-leaf-direct" : (!eff_class.empty() ? "lidar-fallback" : "none");
             // Raw-observation displacement since last tick — only used for the first-classification diagnostic
             // below now (voteClass() itself tracks NET displacement across its own debounce window internally,
             // from the raw position passed in here).
@@ -1559,14 +1581,15 @@ private:
             // flood the log.
             if (was_unclassified && !tr.best_class.empty()) {
                 RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 1000,
-                    "track #%d: first classification '%s' (hits=%d, stationary_ticks=%d, confirmed=%d) — "
-                    "position jump from previous observation = %.2fm, absolute pos=[%.2f,%.2f,%.2f], "
+                    "track #%d: first classification '%s' via %s (mask=%s) (hits=%d, stationary_ticks=%d, "
+                    "confirmed=%d) — position jump from previous observation = %.2fm, absolute pos=[%.2f,%.2f,%.2f], "
                     "size=[%.2f,%.2f,%.2f] (large+established => likely ID swap; small+established => likely "
                     "class contamination from a nearby merge; an anomalously LARGE size vs. the track's own "
                     "usual one is a merged/not-yet-split fused box, not the track's real object; compare "
                     "absolute pos ACROSS repeated events on the SAME track id to tell real walking from "
                     "jitter-around-a-fixed-spot)",
-                    track_ids[ti], tr.best_class.c_str(), tr.hits, tr.stationary_ticks, tr.confirmed ? 1 : 0, jump,
+                    track_ids[ti], tr.best_class.c_str(), class_source, detectionMask(d).c_str(), tr.hits,
+                    tr.stationary_ticks, tr.confirmed ? 1 : 0, jump,
                     tr.last_obs.x, tr.last_obs.y, tr.last_obs.z, tr.size.x, tr.size.y, tr.size.z);
             }
             decaySemanticEvidence(track_ids[ti], tr, eff_class, d.bbox.size);
@@ -1889,7 +1912,7 @@ private:
     int dynamic_confirm_ticks_{3};
     int first_class_confirm_ticks_{2};
     int first_class_established_hits_{10};
-    int first_class_established_confirm_ticks_{5};
+    int first_class_established_confirm_ticks_{2};
     double first_class_min_jump_{0.08};
     double class_match_bonus_{0.25};
     double class_continuity_weight_{0.5};

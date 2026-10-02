@@ -1007,6 +1007,21 @@ private:
                         continue;
                     }
                     Fused& o = fused[static_cast<size_t>(best)];
+                    // Successful-match diagnostic (the failure-path warnings above only cover rejections — this
+                    // is the one that actually matters for tracing a WRONG-but-accepted match, e.g. the leaf
+                    // genuinely landing near a different, already-separate fused object rather than the real
+                    // one — no merge required at all, see tracker_node.cpp's own "class_source" diagnostic for
+                    // the downstream half of this trace).
+                    // NOT throttled on purpose: a 1s per-call-site throttle was hiding events from a SECOND
+                    // camera/leaf firing in the same window as a first one — rare enough (bounded by camera
+                    // count x leaves/tick) that every one is worth seeing while tracing this.
+                    RCLCPP_WARN(this->get_logger(),
+                        "yolo_refine: ACCEPTED (%s leaf %zu class=%s, leaf_pos=[%.2f,%.2f,%.2f] leaf_size=[%.2f,%.2f,%.2f]) "
+                        "-> fused obj BEFORE cut: pos=[%.2f,%.2f,%.2f] size=[%.2f,%.2f,%.2f] mask=%s, iou=%.2f dist=%.2fm",
+                        camera_names_[k].c_str(), li, leaves.box_class[li].c_str(),
+                        lb.center.x(), lb.center.y(), lb.center.z(), lb.size.x(), lb.size.y(), lb.size.z(),
+                        o.box.center.x(), o.box.center.y(), o.box.center.z(), o.box.size.x(), o.box.size.y(), o.box.size.z(),
+                        maskName(o.mask).c_str(), best_iou, center_dist);
                     const Eigen::Matrix3d Rl = lb.rotation.toRotationMatrix().transpose();
                     std::vector<Eigen::Vector3f> inside, rest;
                     for (const auto& q : o.pts) {

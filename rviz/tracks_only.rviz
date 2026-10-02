@@ -192,6 +192,46 @@ Visualization Manager:
       Value: true
 
     # -----------------------------------------------------------
+    # Box dei vari stream di detection PRIMA della fusione (dbscan_detector_node),
+    # un namespace per sorgente — attivabili/disattivabili singolarmente dalla
+    # lista "Namespaces" di questo display una volta espanso: lidar, front_camera,
+    # back_camera (cluster grezzi per sorgente) e front_camera_yolo/back_camera_yolo
+    # (box derivate dai leaf YOLO per camera, ancora non fuse). Disabilitato di
+    # default per non affollare la vista — attivalo quando serve debuggare.
+    # -----------------------------------------------------------
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: false
+      Name: Per-Source Detection Boxes
+      Namespaces:
+        {}
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /onboard_detector_v2/dbscan_detector/boxes_markers
+      Value: false
+
+    # -----------------------------------------------------------
+    # Box FUSE (dbscan_detector_node), dopo la fusione multi-sorgente ma PRIMA
+    # del tracking — utile per vedere cosa arriva effettivamente a tracker_node,
+    # separatamente dai cluster-punti colorati gia' mostrati sopra. Disabilitato
+    # di default.
+    # -----------------------------------------------------------
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: false
+      Name: Fused Boxes (pre-tracking)
+      Namespaces:
+        {}
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /onboard_detector_v2/dbscan_detector/fused/boxes_markers
+      Value: false
+
+    # -----------------------------------------------------------
     # Unica altra visualizzazione dati: i track persistenti (tracker_node).
     # Box neutro (grigio chiaro) per ogni track, colore diverso (arancione)
     # per i track con evidenza semantica (best_class non vuoto), freccia di
