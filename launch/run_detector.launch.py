@@ -578,8 +578,10 @@ def generate_launch_description():
     env_arg = DeclareLaunchArgument(
         'env', default_value='indoor',
         description="Which cfg/<env>/ profile to use for every node in this launch: 'outdoor' or 'indoor'")
+    # false: this branch runs on the live robot, where nothing publishes /clock
+    # (with true every node would wait for it forever). Bag replay: use_sim_time:=true.
     use_sim_time_arg = DeclareLaunchArgument(
-        'use_sim_time', default_value='true',
+        'use_sim_time', default_value='false',
         description='Use /clock — set true when replaying bags with --clock')
     rviz_arg = DeclareLaunchArgument(
         'rviz', default_value='true',

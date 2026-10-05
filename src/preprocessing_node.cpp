@@ -756,13 +756,18 @@ private:
         cam->pub_depth_voxelized_global = this->create_publisher<sensor_msgs::msg::PointCloud2>(
             "/onboard_detector_v2/" + name + "/depth/voxelized_global", qos);
 
-        cam->sub_depth = image_transport::create_subscription(
-            this, cam->depth_topic,
-            [this, cam](const sensor_msgs::msg::Image::ConstSharedPtr& msg) { onRawDepth(*cam, msg); },
-            cam->depth_transport, rmw_qos_profile_sensor_data);
-        cam->sub_depth_camera_info = this->create_subscription<sensor_msgs::msg::CameraInfo>(
-            cam->depth_camera_info_topic, rclcpp::SensorDataQoS(),
-            [this, cam](const sensor_msgs::msg::CameraInfo::ConstSharedPtr& msg) { onDepthCameraInfo(*cam, msg); });
+        // Raw (unaligned) depth is acquired only, never processed (see onRawDepth). An empty
+        // depth_topic skips it: on the live robot every subscribed transport is one more
+        // per-frame encoding done inside the camera driver.
+        if (!cam->depth_topic.empty()) {
+            cam->sub_depth = image_transport::create_subscription(
+                this, cam->depth_topic,
+                [this, cam](const sensor_msgs::msg::Image::ConstSharedPtr& msg) { onRawDepth(*cam, msg); },
+                cam->depth_transport, rmw_qos_profile_sensor_data);
+            cam->sub_depth_camera_info = this->create_subscription<sensor_msgs::msg::CameraInfo>(
+                cam->depth_camera_info_topic, rclcpp::SensorDataQoS(),
+                [this, cam](const sensor_msgs::msg::CameraInfo::ConstSharedPtr& msg) { onDepthCameraInfo(*cam, msg); });
+        }
 
         if (!cam->aligned_depth_cloud_topic.empty()) {
             // Native point cloud already deprojected upstream — no image to

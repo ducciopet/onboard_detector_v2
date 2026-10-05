@@ -44,9 +44,11 @@ preprocessing_node:
     front_camera:
       aligned_depth_transport: zstd
       aligned_depth_cloud_topic: /front_camera/camera/depth/color/points
+      depth_topic: ""   # raw unaligned depth is acquired-only, unused: empty = not subscribed (one less encoding in the camera driver)
     back_camera:
       aligned_depth_transport: zstd
       aligned_depth_cloud_topic: /back_camera/camera/depth/color/points
+      depth_topic: ""   # raw unaligned depth is acquired-only, unused: empty = not subscribed (one less encoding in the camera driver)
 
     depth_scale_factor: 1000.0     # raw_value / scale = meters (1000 for Intel RealSense 16-bit), same for every camera
     depth_min_value: 0.5           # [m] points closer than this are discarded
