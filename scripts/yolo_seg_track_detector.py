@@ -443,13 +443,18 @@ class YoloSegTrackDetector(Node):
             return annotated, detections, mask_label
 
         # ids: a real, PERSISTENT track id across frames when enable_tracking
-        # (boxes.id, assigned by self.tracker); otherwise just this frame's
-        # own 0..N-1 detection index, with NO relation to any other frame's
-        # numbering — downstream consumers must not treat these as stable
-        # identity when enable_tracking is false.
+        # (boxes.id, assigned by self.tracker); otherwise NEGATIVE
+        # (-1, -2, ...), not a plain 0..N-1 index — still unique WITHIN this
+        # one frame (preprocessing_node/dbscan_detector_node's onLeaves()
+        # still groups a mask's per-pixel labels by it), but a downstream
+        # consumer that treats this id as a cross-frame persistent identity
+        # (tracker_node's decaySemanticEvidence(), see its own comment) sees
+        # a negative value and correctly refuses to trust it — see
+        # yolo_semantic_seg_detector.py's own identical comment, this is the
+        # same fix mirrored for the mask/instance-seg path.
         ids = (
             boxes.id.cpu().numpy().astype(np.int64) if self.enable_tracking
-            else np.arange(len(boxes), dtype=np.int64)
+            else -(np.arange(len(boxes), dtype=np.int64) + 1)
         )
         cls_ids = boxes.cls.cpu().numpy().astype(np.int64)
         confs = boxes.conf.cpu().numpy()

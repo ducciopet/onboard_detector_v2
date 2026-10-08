@@ -86,6 +86,22 @@
         the same LiDAR ray through some OTHER track's own recent position AND is noticeably farther from the
         LiDAR than that position was. When flagged, this tick simply does not count toward dynamic_ticks (the
         match/track itself is unaffected — the object is almost certainly real and static, just newly visible).
+        Exempted (on top of classified_now) whenever the track's own dynamic_hist shows it was moving before
+        this tick — a crowded-scene refinement: the SAME geometric signature (same ray, farther range, occluder
+        moving) is produced when a real dynamic/potentially-dynamic object D/PD is revealed again after a
+        different dynamic object D walked in front of it, not just by a revealed static wall, and classified_now
+        alone doesn't catch a D/PD track whose class was cleared by the FOV-based decay trigger during a long
+        enough occlusion.
+
+      - OCCLUSION-AWARE MISSED-TICKS BUDGET (isOcclusionExplained() — the mirror check, not from v1 either): a
+        track that misses this tick because some OTHER, currently-matched track is physically standing between
+        it and the LiDAR along roughly the same ray (same crowded D-in-front-of-D/PD scenario as above, from the
+        occluded side instead of the revealed side) does not burn its missed_in_a_row budget for that tick —
+        without this, an occlusion that happens to outlast max_missed_classified_ kills the occluded track
+        outright and forces a brand-new id once the occluder moves on, even though the miss had a known, benign
+        physical cause the tracker could see for itself. Scoped to tracks "worth protecting" (classified now, or
+        with any dynamic_hist entry) so a run-of-the-mill static/noise track sitting near another track's ray
+        still ages out normally.
 
       - STATIC TRACKS MUST DIE: this detector's whole purpose is finding dynamic/potentially-dynamic objects, so
         a track that settles for good must stop being published and eventually be deleted, not linger forever.
@@ -118,8 +134,9 @@
       - SEMANTIC DECAY (v1's own two-part mechanism, dynamicDetector.cpp's "YOLO decay (FOV-based)" / "YOLO decay
         (base size mismatch)", brought back closely per explicit request — see decaySemanticEvidence()): the ID-
         swap guard above only stops a BAD match from happening; this stops a track that already HAS a class from
-        going stale and keeping it forever once v1-style voting alone no longer agrees it should. Three triggers
-        (v1 only has the first two, mirroring its is_yolo_candidate decay closely):
+        going stale and keeping it forever once v1-style voting alone no longer agrees it should. Three
+        triggers (v1 has the first two; the third has no v1 equivalent at all and has been removed and
+        re-added once already — see decaySemanticEvidence()'s own comment for the full back-and-forth):
           1. INSIDE any camera's FOV (own per-camera pinhole projection, replicated from v1's isInCameraFOV, OR'd
              across front_camera/back_camera since v1 only ever had one camera): if a classified track goes
              track_max_non_yolo_in_fov_frames consecutive MATCHED ticks with NO fresh YOLO evidence while
@@ -127,29 +144,23 @@
              too, so a later re-classification starts clean). This is exactly what the user asked for: a track
              cannot keep being "semantic" on old evidence alone while in FOV and YOLO is silently not confirming
              it tick after tick.
-          2. OUTSIDE every camera's FOV, no 2D re-confirmation is possible at all, so v1 instead watches the
-             box's size against the largest size ever seen WITH real YOLO evidence (a high-water mark, never
-             shrunk) and flags GROWTH past it for track_max_yolo_base_mismatch_frames consecutive ticks as an ID
-             swap onto a bigger object (wall, vehicle, noisy merged cluster) — v1's own reasoning for not also
-             flagging shrinkage: outside FOV the box is LiDAR-only (sparser) and naturally runs smaller as a
-             normal artifact (e.g. partial self-occlusion past the robot's own LiDAR shadow cone).
-          3. OUTSIDE every camera's FOV, same high-water mark, but now also SHRINKAGE past its own, higher bar
-             (track_yolo_base_shrink_thresh, no v1 equivalent): added after an observed failure where a person's
-             track got associated onto a small stationary object outside FOV and the "person" class survived for
-             a long time, since only growth was ever being checked. A higher bar than the growth side's own
-             threshold specifically because trigger 2's reasoning above (ordinary LiDAR-only sparsity/occlusion
-             shrinks a real detection without it being a different object) is still true for a MODEST shrink —
-             this only fires on a genuinely drastic, sustained one.
-        Both outside-FOV triggers share the same streak counter/debounce (track_max_yolo_base_mismatch_frames) —
-        growth and shrink are mutually exclusive on any given tick, so this never double-counts. Whitelist-gated
-        like everything else that treats class evidence as "potentially-dynamic" (see isDynamicClass()/
-        semantic_dynamic_classes_'s own comment) only in the sense that a track only HAS a class to decay in the
-        first place if isDynamicClass() let it become best_class's winner via voteClass() being called at all —
-        decaySemanticEvidence() itself runs for ANY non-empty best_class, whitelisted or not, same as v1 would if
-        it tracked a specific class string (it doesn't). No v1 equivalent exists for WHEN this runs on a missed
-        tick either way — it only runs on a MATCHED tick, same as v1 (verified against dynamicDetector.cpp's own
-        kalmanFilterAndUpdateHist: the YOLO-decay block lives entirely inside its "1) Track matchate" loop, not
-        its separate "2) Track non matchate" propagation-only one).
+          2. Against the largest size ever seen WITH real YOLO evidence (a high-water mark, never shrunk):
+             flags GROWTH past it for track_max_yolo_base_mismatch_frames consecutive ticks as an ID swap onto a
+             bigger object (wall, vehicle, noisy merged cluster) — v1 only ever ran this outside FOV (see this
+             trigger's own comment in decaySemanticEvidence() for why it now runs inside FOV too).
+          3. The SAME high-water mark, but for SHRINKAGE, GATED on the YOLO 2D (ByteTrack) track id instead of
+             running unconditionally: a box smaller than its own baseline is only trusted as a real ID swap when
+             YOLO's OWN 2D tracker also disagrees (this tick's track id differs from — or is absent vs. — the
+             one the baseline was built on); when the id matches, the shrink is treated as v1 would treat any
+             shrink — a normal physical artifact (occlusion, LiDAR shadow cone, viewing angle), not an ID swap.
+        Whitelist-gated like everything else that treats class evidence as "potentially-dynamic" (see
+        isDynamicClass()/semantic_dynamic_classes_'s own comment) only in the sense that a track only HAS a
+        class to decay in the first place if isDynamicClass() let it become best_class's winner via voteClass()
+        being called at all — decaySemanticEvidence() itself runs for ANY non-empty best_class, whitelisted or
+        not, same as v1 would if it tracked a specific class string (it doesn't). No v1 equivalent exists for
+        WHEN this runs on a missed tick either way — it only runs on a MATCHED tick, same as v1 (verified
+        against dynamicDetector.cpp's own kalmanFilterAndUpdateHist: the YOLO-decay block lives entirely inside
+        its "1) Track matchate" loop, not its separate "2) Track non matchate" propagation-only one).
 
       - VELOCITY-DIRECTION GATE (v1's computeVelocityDirectionError/passesVelocityDirectionGate, ported per
         explicit request — see velocityDirectionError() and the constructor's own comment on the three
@@ -268,6 +279,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <numeric>
 #include <set>
 #include <string>
 #include <utility>
@@ -419,6 +431,7 @@ struct Track {
     int non_yolo_in_fov_streak = 0;
     double yolo_x_width = 0.0, yolo_y_width = 0.0;  // high-water mark: largest size seen WITH fresh YOLO evidence
     int yolo_base_mismatch_streak = 0;
+    int last_yolo_track_id = -1;  // the YOLO 2D track id active when yolo_x_width/yolo_y_width were last updated — see decaySemanticEvidence()'s own comment
 
     // Historical continuity ("sticky dynamic") + KF-velocity confidence — v1's PATH 2
     // (forceDynaFrames_/forceDynaCheckRange_) and PATH 3a (dynaKfVelStdRatio_) of its classification
@@ -740,15 +753,9 @@ public:
         max_non_yolo_in_fov_frames_ = declare_parameter<int>("track_max_non_yolo_in_fov_frames", 5);     // v1: maxNonYoloInFovFrames_
         max_yolo_base_mismatch_frames_ = declare_parameter<int>("track_max_yolo_base_mismatch_frames", 5); // v1: maxYoloBaseMismatchFrames_
         yolo_base_mismatch_thresh_ = declare_parameter<double>("track_yolo_base_mismatch_thresh", 0.50);  // v1: yoloBaseMismatchThresh_
-        // No v1 equivalent (v1 only ever flags GROWTH past the high-water mark outside FOV — see the file
-        // header's own SEMANTIC DECAY section and this constructor's comment on why shrinkage alone used to be
-        // ignored as a normal LiDAR-only-sparsity artifact). Added because that assumption broke in practice: an
-        // observed ID swap from a person's track onto a small stationary object — WAY smaller than the person's
-        // own high-water mark, not bigger — kept the "person" class for a long time because only growth was
-        // checked. Same streak counter/mechanism as the growth check (decaySemanticEvidence()), just the other
-        // direction and its own, higher bar: ordinary partial occlusion outside FOV can legitimately cut a
-        // LiDAR-only box's size substantially without it being a different object, so this needs to be a more
-        // drastic, sustained shrink than the growth side's own threshold before it's trusted as an ID swap.
+        // No v1 equivalent — re-added after being removed and then found to be worth keeping after all, now
+        // gated on the YOLO 2D track id instead of running unconditionally; see decaySemanticEvidence()'s own
+        // comment for the full back-and-forth.
         yolo_base_shrink_thresh_ = declare_parameter<double>("track_yolo_base_shrink_thresh", 0.60);
 
         // Raw-2D-projection semantic fallback (see yoloClassAtPixel()'s own comment): a LiDAR-only box (no camera
@@ -827,6 +834,14 @@ private:
     // empty when there is none this tick (most ticks, for most objects: YOLO only refines a fraction each tick).
     static std::string detectionClass(const vision_msgs::msg::Detection3D& d) {
         return d.results.size() < 2 ? std::string() : d.results[1].hypothesis.class_id;
+    }
+
+    // results[1].hypothesis.score, when detectionClass(d) is non-empty, is the refining YOLO leaf's own 2D
+    // (ByteTrack) track id — see dbscan_detector_node.cpp's publish loop, which repurposed this field from an
+    // unread constant 1.0. -1 means "no id" (never refined this tick, or the original YOLO id string failed to
+    // parse as a number upstream in preprocessing_node — see that file's own box/mask branches).
+    static int detectionYoloTrackId(const vision_msgs::msg::Detection3D& d) {
+        return d.results.size() < 2 ? -1 : static_cast<int>(d.results[1].hypothesis.score);
     }
 
     // results[0] is ALWAYS the provenance mask (e.g. "L", "L+F", "L+B" — which sources contributed points, see
@@ -1045,6 +1060,42 @@ private:
         return false;
     }
 
+    // Mirror of isDisocclusionArtifact() above, checked the other way round: a track that MISSED this tick (no
+    // detection matched it) might simply be occluded RIGHT NOW by some OTHER, currently-matched track lying
+    // closer to the LiDAR along roughly the same ray — e.g. a crowded scene where a dynamic object D walks
+    // between the LiDAR and a dynamic/potentially-dynamic object D/PD it's about to pass in front of. Without
+    // this, every miss counts equally toward missed_in_a_row/max_missed_classified_ regardless of WHY the
+    // object wasn't seen — a plain sensor occlusion (explainable: something the tracker itself is already
+    // tracking is physically in the way) is treated identically to an unexplained disappearance, so an
+    // occlusion that happens to outlast the flat missed-ticks budget kills the occluded track and forces a
+    // brand-new id on reappearance (a real-world crowded-scene failure, not a false-positive concern like
+    // isDisocclusionArtifact's own — hence no dynamic_ticks>0-style gate on the OCCLUDER here: literally any
+    // currently-matched detection standing in the way is a valid physical occluder, moving or not).
+    bool isOcclusionExplained(const Eigen::Vector3d& predicted_pos, int exclude_track_id,
+                              const std::vector<int>& track_ids, const std::vector<int>& track_to_det,
+                              const vision_msgs::msg::Detection3DArray::ConstSharedPtr& msg) const {
+        if (!lidar_tf_ok_) return false;
+        const Eigen::Vector3d toPred = predicted_pos - lidar_origin_;
+        const double predRange = toPred.norm();
+        if (predRange < 1e-3) return false;
+        for (size_t ti2 = 0; ti2 < track_ids.size(); ++ti2) {
+            if (track_ids[ti2] == exclude_track_id) continue;
+            const int di2 = track_to_det[ti2];
+            if (di2 < 0) continue;  // only a track with a REAL detection this tick can physically occlude anything
+            const auto& occ = msg->detections[static_cast<size_t>(di2)];
+            const Eigen::Vector3d toOcc(occ.bbox.center.position.x - lidar_origin_.x(),
+                                        occ.bbox.center.position.y - lidar_origin_.y(),
+                                        occ.bbox.center.position.z - lidar_origin_.z());
+            const double occRange = toOcc.norm();
+            if (occRange < 1e-3) continue;
+            const double cosAngle = toPred.dot(toOcc) / (predRange * occRange);
+            if (cosAngle < disocclusion_min_cos_angle_) continue;
+            if (occRange >= predRange - disocclusion_min_range_margin_) continue;  // occluder must be CLOSER than the predicted position
+            return true;
+        }
+        return false;
+    }
+
     // One candidate match of a 3D box against a camera's raw 2D YOLO boxes — see pixelCandidates()'s own comment
     // for why this returns EVERY match instead of picking one itself.
     struct PixelCandidate { int cam_idx; size_t det2d_idx; double iou; std::string cls; };
@@ -1137,10 +1188,11 @@ private:
     // SEMANTIC DECAY — see the file header's own section for the full rationale. Only called for a track that
     // was MATCHED this tick (a missed tick leaves semantic state untouched, like everything else in this file).
     void decaySemanticEvidence(int id, Track& tr, const std::string& det_class_this_tick,
-                               const vision_msgs::msg::BoundingBox3D::_size_type& det_size) {
+                               const vision_msgs::msg::BoundingBox3D::_size_type& det_size, int det_track_id) {
         if (tr.best_class.empty()) {
             tr.non_yolo_in_fov_streak = 0;
             tr.yolo_base_mismatch_streak = 0;
+            tr.last_yolo_track_id = -1;
             return;
         }
         const bool inside_fov = insideAnyCameraFov(tr.kf.pos());
@@ -1156,6 +1208,7 @@ private:
                 tr.non_yolo_in_fov_streak = 0;
                 tr.yolo_base_mismatch_streak = 0;
                 tr.yolo_x_width = tr.yolo_y_width = 0.0;
+                tr.last_yolo_track_id = -1;
                 RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
                     "track #%d: cleared class '%s' — in camera FOV with no fresh YOLO evidence for %d ticks, "
                     "pos=[%.2f,%.2f,%.2f] size=[%.2f,%.2f,%.2f]",
@@ -1167,31 +1220,51 @@ private:
             tr.non_yolo_in_fov_streak = 0;
         }
 
-        // high-water mark: largest size ever seen on a tick WITH real YOLO evidence, never shrunk.
+        // high-water mark: largest size ever seen on a tick WITH real YOLO evidence, never shrunk — plus the
+        // YOLO 2D (ByteTrack) track id active at that moment (prev_track_id below is the value from BEFORE this
+        // tick's own update, i.e. the id the current baseline was actually built on).
+        const int prev_track_id = tr.last_yolo_track_id;
         if (!det_class_this_tick.empty()) {
             tr.yolo_x_width = std::max(tr.yolo_x_width, det_size.x);
             tr.yolo_y_width = std::max(tr.yolo_y_width, det_size.y);
+            tr.last_yolo_track_id = det_track_id;
         }
 
-        // (2) GROWTH (v1 parity, wall/vehicle/noisy-cluster ID swap) AND sustained SHRINKAGE (no v1 equivalent —
-        // see track_yolo_base_shrink_thresh's own comment) against the high-water mark — v1 only ever ran this
-        // outside FOV (trigger (1) above was assumed sufficient inside it), but that assumption broke in
-        // practice: a track can keep MATCHING every tick via LiDAR-only/depth-only association (no fresh 2D
-        // YOLO re-confirmation needed for that) while its own box silently grows onto nearby static clutter,
-        // INSIDE camera FOV, for as long as trigger (1)'s own max_non_yolo_in_fov_frames_ window allows before
-        // it fires — confirmed on a live bag: a person's track, correctly classified "person" at spawn
-        // (size ~0.8x0.5x1.6), grew to ~1.6x0.5x1.9 (furniture-sized) over the following ~9 ticks before trigger
-        // (1) finally cleared it — a real ID swap (the track's own identity drifted onto a static cabinet while
-        // it sat unconfirmed, not just a one-off misclassification), not caught by a check that only ran
-        // outside FOV. So this now runs regardless of inside_fov — trigger (1) still independently clears a
-        // long-UNCONFIRMED track inside FOV; this one additionally catches a track whose SIZE has already
-        // drifted away from its own classified baseline, inside or outside, often well before (1)'s own streak
-        // would complete.
+        // (2) GROWTH (v1 parity: dynamicDetector.cpp's own "YOLO decay (base size mismatch)" flags growth, never
+        // shrinkage — v1's own comment there: "Shrinkage is ignored — it is a physical artifact, not an ID
+        // swap") against the high-water mark — v1 only ever ran this outside FOV (trigger (1) above was assumed
+        // sufficient inside it), but that assumption broke in practice: a track can keep MATCHING every tick via
+        // LiDAR-only/depth-only association (no fresh 2D YOLO re-confirmation needed for that) while its own box
+        // silently grows onto nearby static clutter, INSIDE camera FOV, for as long as trigger (1)'s own
+        // max_non_yolo_in_fov_frames_ window allows before it fires — confirmed on a live bag: a person's track,
+        // correctly classified "person" at spawn (size ~0.8x0.5x1.6), grew to ~1.6x0.5x1.9 (furniture-sized)
+        // over the following ~9 ticks before trigger (1) finally cleared it. So this now runs regardless of
+        // inside_fov.
+        //
+        // PLUS a SHRINK trigger, GATED on the YOLO 2D track id (track_yolo_base_shrink_thresh): a round trip on
+        // this one. It originally ran unconditionally and was removed after a live-bag diagnostic (negative-X
+        // "person" misclassification report) traced it clearing "person" off a track that was, in fact, still
+        // the SAME real person the whole time — the box legitimately shrinks for a handful of ticks (LiDAR
+        // shadow cone up close, a nearby fused object intermittently winning the Kuhn assignment, viewing-angle
+        // changes...). But removing it outright brought back a DIFFERENT failure the unconditional version used
+        // to catch: a track's identity genuinely drifting onto a smaller, different object. The fix is neither
+        // "always trust shrink" nor "never trust it" — it's "trust it only when YOLO's OWN 2D tracker also says
+        // this is a different box": det_track_id (this tick's own YOLO 2D track id, from
+        // dbscan_detector_node's yolo_refine) vs. prev_track_id (the id the current high-water mark was built
+        // on, captured above BEFORE this tick's update). Same real object, momentarily smaller for a sensor
+        // reason -> det_track_id stays the SAME as prev_track_id (YOLO's own tracker never lost it) -> shrink is
+        // ignored, exactly like the fix that removed the false positives. Genuinely a different, smaller object
+        // -> either a brand-new det_track_id (YOLO itself re-acquired/switched identity) or no fresh YOLO
+        // evidence at all this tick (det_track_id < 0, e.g. LiDAR-only) -> shrink is NOT ignored, restoring the
+        // original protection. Only ever evaluated with BOTH ids known (>= 0) — a LiDAR-only tick has nothing to
+        // compare and falls through to "not ignored" by the id_changed test below, same as before this fix.
         if (tr.yolo_x_width > 0.0 && tr.yolo_y_width > 0.0) {
             const double growth_x = (det_size.x - tr.yolo_x_width) / std::max(tr.yolo_x_width, 0.01);
             const double growth_y = (det_size.y - tr.yolo_y_width) / std::max(tr.yolo_y_width, 0.01);
             const bool grew = growth_x > yolo_base_mismatch_thresh_ || growth_y > yolo_base_mismatch_thresh_;
-            const bool shrank = growth_x < -yolo_base_shrink_thresh_ || growth_y < -yolo_base_shrink_thresh_;
+            const bool id_known_same = det_track_id >= 0 && prev_track_id >= 0 && det_track_id == prev_track_id;
+            const bool shrank = !id_known_same &&
+                                 (growth_x < -yolo_base_shrink_thresh_ || growth_y < -yolo_base_shrink_thresh_);
             if (grew || shrank) {
                 if (++tr.yolo_base_mismatch_streak >= max_yolo_base_mismatch_frames_) {
                     tr.best_class.clear();
@@ -1200,11 +1273,13 @@ private:
                     tr.pending_class_ticks = 0;
                     tr.yolo_base_mismatch_streak = 0;
                     tr.yolo_x_width = tr.yolo_y_width = 0.0;
+                    tr.last_yolo_track_id = -1;
                     RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
-                        "track #%d: cleared class '%s' — box %s %.0f%%/%.0f%% past its YOLO baseline for %d ticks "
-                        "(%s FOV)",
+                        "track #%d: cleared class '%s' — box %s %.0f%%/%.0f%% past its YOLO baseline for %d "
+                        "ticks (%s FOV, yolo_id %d->%d)",
                         id, cleared_class.c_str(), grew ? "grew" : "shrank", growth_x * 100.0, growth_y * 100.0,
-                        max_yolo_base_mismatch_frames_, inside_fov ? "inside" : "outside");
+                        max_yolo_base_mismatch_frames_, inside_fov ? "inside" : "outside",
+                        prev_track_id, det_track_id);
                 }
             } else {
                 tr.yolo_base_mismatch_streak = 0;
@@ -1356,11 +1431,14 @@ private:
                 // the very first offending tick, not the ninth. The track simply coasts (missed) rather than
                 // matching a since-the-person-left stationary stand-in; max_missed_classified_'s own extra
                 // patience still gives the real object plenty of room to be legitimately reacquired later.
+                // GROWTH only (v1 parity — see decaySemanticEvidence()'s own comment on why the symmetric
+                // shrink check that used to live here and there was removed): rejecting a candidate for being
+                // too SMALL blocked re-matching the SAME real person during ordinary occlusion/shadow-cone
+                // shrinkage, which is exactly the "fast, unexplained decay" failure this file was chasing.
                 if (isDynamicClass(tr.best_class) && det_class.empty() && tr.yolo_x_width > 0.0 && tr.yolo_y_width > 0.0) {
                     const double bx = (d.bbox.size.x - tr.yolo_x_width) / std::max(tr.yolo_x_width, 0.01);
                     const double by = (d.bbox.size.y - tr.yolo_y_width) / std::max(tr.yolo_y_width, 0.01);
-                    if (bx > yolo_base_mismatch_thresh_ || by > yolo_base_mismatch_thresh_ ||
-                        bx < -yolo_base_shrink_thresh_ || by < -yolo_base_shrink_thresh_)
+                    if (bx > yolo_base_mismatch_thresh_ || by > yolo_base_mismatch_thresh_)
                         continue;
                 }
 
@@ -1438,8 +1516,24 @@ private:
         std::vector<std::vector<size_t>> candidates_by_det(nd);
         for (const auto& c : candidates) candidates_by_det[c.det].push_back(c.track);
         std::vector<int> track_to_det(nt, -1), det_to_track(nd, -1), visited(nt, -1);
+        // Detections are given their turn to claim/steal a track in order of their OWN best candidate's score,
+        // strongest first — not raw array index order (no v1 equivalent to compare against; a general
+        // weighted-bipartite-matching concern independent of it). tryAugment's "steal" semantics make this an
+        // augmenting-path heuristic for maximum-CARDINALITY matching, not a true maximum-weight one — the
+        // actual assignment it converges to depends on which detection gets to claim first. With raw index
+        // order, a detection with only a mediocre, borderline-score match could claim a track before a
+        // DIFFERENT detection with a far stronger, more confident match for that SAME track ever gets a turn —
+        // the strong match then has to settle for stealing (if tryAugment's recursion finds a free alternative
+        // for the mediocre one) or its own second-best. Processing strongest-match-first means the most
+        // confident pairing anywhere is locked in before any weaker, more ambiguous one gets to contest it.
+        std::vector<double> det_best_score(nd, -std::numeric_limits<double>::infinity());
+        for (const auto& c : candidates) det_best_score[c.det] = std::max(det_best_score[c.det], c.score);
+        std::vector<size_t> det_order(nd);
+        std::iota(det_order.begin(), det_order.end(), 0);
+        std::stable_sort(det_order.begin(), det_order.end(),
+            [&](size_t a, size_t b) { return det_best_score[a] > det_best_score[b]; });
         int token = 0;
-        for (size_t di = 0; di < nd; ++di) {
+        for (size_t di : det_order) {
             ++token;
             tryAugment(di, candidates_by_det, track_to_det, det_to_track, visited, token);
         }
@@ -1503,7 +1597,23 @@ private:
             Track& tr = tracks_.at(track_ids[ti]);
             const int di = track_to_det[ti];
             if (di < 0) {
-                ++tr.missed_in_a_row;
+                // Occlusion-aware miss: a track worth protecting (classified, or with ANY dynamic tick in its
+                // own recent history — see Track::dynamic_hist) that is plausibly occluded right now by some
+                // other, currently-matched track doesn't burn through its missed-ticks budget for a miss that
+                // has a known physical explanation — see isOcclusionExplained()'s own comment. Scoped to
+                // "worth protecting" tracks only: a random static/noise track sitting near another track's
+                // ray should still age out normally, not get indefinite patience.
+                const bool worth_protecting = isDynamicClass(tr.best_class) ||
+                    std::any_of(tr.dynamic_hist.begin(), tr.dynamic_hist.end(), [](bool b) { return b; });
+                const bool occluded = worth_protecting &&
+                    isOcclusionExplained(predicted_pos[ti], tr.id, track_ids, track_to_det, msg);
+                if (occluded) {
+                    RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 1000,
+                        "track #%d ('%s'): miss not counted against its budget — occluded by a closer, "
+                        "currently-matched track along the same LiDAR ray", tr.id, tr.best_class.c_str());
+                } else {
+                    ++tr.missed_in_a_row;
+                }
                 continue;
             }
             det_used[static_cast<size_t>(di)] = 1;
@@ -1563,6 +1673,11 @@ private:
             // already-claimed-box exclusion applies — or, if the real object is ALSO fallback-only, the two
             // compete purely on IoU with no depth to disambiguate them, and the wrong one can still win).
             const char* class_source = had_depth_class ? "depth-leaf-direct" : (!eff_class.empty() ? "lidar-fallback" : "none");
+            // Only the depth-leaf-direct path carries a real YOLO 2D track id through from
+            // dbscan_detector_node's yolo_refine (see detectionYoloTrackId()'s own comment) — the LiDAR-only
+            // fallback path (pixelCandidates()) never built one, so it's treated as "no id" here, same as a
+            // plain LiDAR-only match with no YOLO evidence at all.
+            const int det_track_id = had_depth_class ? detectionYoloTrackId(d) : -1;
             // Raw-observation displacement since last tick — only used for the first-classification diagnostic
             // below now (voteClass() itself tracks NET displacement across its own debounce window internally,
             // from the raw position passed in here).
@@ -1592,7 +1707,7 @@ private:
                     tr.stationary_ticks, tr.confirmed ? 1 : 0, jump,
                     tr.last_obs.x, tr.last_obs.y, tr.last_obs.z, tr.size.x, tr.size.y, tr.size.z);
             }
-            decaySemanticEvidence(track_ids[ti], tr, eff_class, d.bbox.size);
+            decaySemanticEvidence(track_ids[ti], tr, eff_class, d.bbox.size, det_track_id);
             matched_ids.insert(track_ids[ti]);
 
             // Static-track aging (see this class's own constructor comment): counts consecutive ticks this track
@@ -1656,7 +1771,17 @@ private:
             // range alignment against some OTHER simultaneously-dynamic track's own recent trail in a room with
             // several moving/noisy tracks at once — permanently stuck at "potentially_dynamic" (green) despite
             // plainly moving (205 resets observed on classified tracks in one 99s run even after the first fix).
-            const bool blocked_by_disocclusion = disocclusion && !classified_now;
+            // Crowded-scene refinement: classified_now alone misses a track that WAS dynamic/potentially-
+            // dynamic before this tick but lost its class during a long occlusion (decaySemanticEvidence's own
+            // FOV-based trigger — no fresh YOLO confirmation for track_max_non_yolo_in_fov_frames ticks while
+            // occluded) and hasn't been re-classified yet at the exact tick it reappears. Exactly the
+            // D-passes-in-front-of-D/PD case: the reappearing D/PD object is textbook-indistinguishable from a
+            // revealed wall by the geometric test alone (same ray, farther range, occluder was moving) unless
+            // this track's OWN recent history says it was genuinely moving before — tr.dynamic_hist (pushed
+            // AFTER this decision, so it still reads as "before this tick" here) is exactly that record.
+            const bool had_dynamic_history = std::any_of(tr.dynamic_hist.begin(), tr.dynamic_hist.end(),
+                                                          [](bool b) { return b; });
+            const bool blocked_by_disocclusion = disocclusion && !classified_now && !had_dynamic_history;
             if (blocked_by_disocclusion)
                 RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 1000,
                     "track #%d: suppressed as a probable disocclusion artifact (background revealed behind another track)",

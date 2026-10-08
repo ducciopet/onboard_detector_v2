@@ -713,14 +713,20 @@ def generate_launch_description():
                      'yet another concurrent GPU consumer on the same 8GB laptop GPU) — test it on its own '
                      'first before enabling alongside enable_semantic_segmentation.')
     enable_semantic_ground_points_arg = DeclareLaunchArgument(
-        'enable_semantic_ground_points', default_value='false',
+        'enable_semantic_ground_points', default_value='true',
         description='Whether preprocessing_node also builds semantic_ground_points: the depth points that '
-                     'enable_semantic_segmentation\'s segmentation_mask marks as ground (nothing consumes it yet — '
-                     'a comparison path against gseg3d_ground). Works on both depth paths: per pixel on the '
-                     'aligned depth image, or — for a camera using the native point cloud '
-                     '(aligned_depth_cloud_topic set) — by projecting each point onto the mask through the '
-                     'depth->color extrinsic and the color intrinsics. Only takes effect together with '
-                     'enable_semantic_segmentation.')
+                     'enable_semantic_segmentation\'s segmentation_mask marks as ground. On by default — '
+                     'tracks_only.rviz shows it for both cameras as a direct visual comparison against the '
+                     'RANSAC floor slab and gseg3d_ground. Works on both depth paths: per pixel on the aligned '
+                     'depth image, or — for a camera using the native point cloud (aligned_depth_cloud_topic '
+                     'set) — by projecting each point onto the mask through the depth->color extrinsic and the '
+                     'color intrinsics. Only takes effect together with enable_semantic_segmentation AND that '
+                     'node\'s own enable_semantic (cfg/<env>/semantic_segmentation.yaml, now true — it was the '
+                     'real gate keeping this mask from ever being computed, see that file\'s own comment). This '
+                     'arg alone is free (plain CPU deprojection), but enable_semantic itself is NOT: it forces a '
+                     'full-resolution decode instead of the half-size one detection-only uses, plus a second '
+                     'inference pass at inference_size (1024) on yolo_semantic_seg_detector\'s own already-busy '
+                     'GPU process, on top of the person detection+tracking it also runs.')
 
     return LaunchDescription([
         env_arg,

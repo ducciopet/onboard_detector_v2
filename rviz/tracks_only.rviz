@@ -287,6 +287,192 @@ Visualization Manager:
         Value: /yolo_semantic_seg/back_camera/detection_image
       Value: true
 
+    # -----------------------------------------------------------
+    # Ground segmentation, APPROCCIO GEOMETRICO (static_structures_node):
+    # piani muro (ns=wall_bbox, RANSAC+PCA sulla nuvola LiDAR) + uno slab
+    # "floor" per camera (ns=floor, piano RANSAC EMA-tracked nel tempo).
+    # -----------------------------------------------------------
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Ground Segmentation — Geometric (RANSAC planes)
+      Namespaces:
+        {}
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /onboard_detector_v2/static_structures/wall_markers
+      Value: true
+
+    # -----------------------------------------------------------
+    # Ground segmentation, APPROCCIO GEOMETRICO #2 (GSeg3D, vendored da
+    # dfki-ric/ground_segmentation): split ground/non-ground per celle di
+    # griglia + region growing, indipendente dal piano RANSAC qui sopra —
+    # confronta i punti verdi (ground) contro lo slab "floor" dello stesso
+    # colore di camera, nello stesso punto nello spazio.
+    # -----------------------------------------------------------
+    - Alpha: 0.8
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds:
+        Max Value: 10
+        Min Value: -10
+        Value: true
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz_default_plugins/PointCloud2
+      Color: 0; 255; 0
+      Color Transformer: FlatColor
+      Decay Time: 0
+      Enabled: true
+      Invert Rainbow: false
+      Max Color: 255; 255; 255
+      Min Color: 0; 0; 0
+      Name: Ground Segmentation — Geometric GSeg3D (lidar, ground)
+      Position Transformer: XYZ
+      Selectable: false
+      Size (Pixels): 3
+      Size (m): 0.0299999993
+      Style: Flat Squares
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /onboard_detector_v2/lidar/gseg3d_ground
+      Value: true
+
+    - Alpha: 0.8
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds:
+        Max Value: 10
+        Min Value: -10
+        Value: true
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz_default_plugins/PointCloud2
+      Color: 255; 255; 0
+      Color Transformer: FlatColor
+      Decay Time: 0
+      Enabled: true
+      Invert Rainbow: false
+      Max Color: 255; 255; 255
+      Min Color: 0; 0; 0
+      Name: Ground Segmentation — Geometric GSeg3D (front_camera, ground)
+      Position Transformer: XYZ
+      Selectable: false
+      Size (Pixels): 4
+      Size (m): 0.0299999993
+      Style: Flat Squares
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /onboard_detector_v2/front_camera/gseg3d_ground
+      Value: true
+
+    # -----------------------------------------------------------
+    # Ground segmentation, APPROCCIO SEMANTICO (yolo_semantic_seg_node):
+    # punti 3D che la maschera di segmentazione (road+sidewalk+terrain)
+    # marca come "terreno", proiettati in global_frame — confronta
+    # direttamente con lo slab "floor" geometrico qui sopra. Richiede
+    # enable_semantic_ground_points (run_detector.launch.py, true di
+    # default) — senza quel flag questi due topic non vengono nemmeno
+    # pubblicati e qui non si vede nulla.
+    # -----------------------------------------------------------
+    - Alpha: 0.7
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds:
+        Max Value: 10
+        Min Value: -10
+        Value: true
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz_default_plugins/PointCloud2
+      Color: 255; 0; 255
+      Color Transformer: FlatColor
+      Decay Time: 0
+      Enabled: true
+      Invert Rainbow: false
+      Max Color: 255; 255; 255
+      Min Color: 0; 0; 0
+      Name: Ground Segmentation — Semantic (front_camera)
+      Position Transformer: XYZ
+      Selectable: false
+      Size (Pixels): 4
+      Size (m): 0.0299999993
+      Style: Flat Squares
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /onboard_detector_v2/front_camera/semantic_ground_points
+      Value: true
+
+    - Alpha: 0.7
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds:
+        Max Value: 10
+        Min Value: -10
+        Value: true
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz_default_plugins/PointCloud2
+      Color: 255; 105; 180
+      Color Transformer: FlatColor
+      Decay Time: 0
+      Enabled: true
+      Invert Rainbow: false
+      Max Color: 255; 255; 255
+      Min Color: 0; 0; 0
+      Name: Ground Segmentation — Semantic (back_camera)
+      Position Transformer: XYZ
+      Selectable: false
+      Size (Pixels): 4
+      Size (m): 0.0299999993
+      Style: Flat Squares
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /onboard_detector_v2/back_camera/semantic_ground_points
+      Value: true
+
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: Semantic Segmentation (front_camera, 19-class)
+      Normalize Range: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Transport Hint: compressed
+        Value: /yolo_semantic_seg/front_camera/semantic_color
+      Value: true
+
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: Semantic Segmentation (back_camera, 19-class)
+      Normalize Range: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Transport Hint: compressed
+        Value: /yolo_semantic_seg/back_camera/semantic_color
+      Value: true
+
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -348,8 +534,12 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.5
-      Target Frame: <Fixed Frame>
+      # Laterale invece che dall'alto (Pitch basso = quasi all'altezza del
+      # pavimento, non sopra la scena) — vedi static_structures_node.cpp's
+      # floor slab (scale.z 0.02->0.08, alpha 0.35->0.55) per la stessa
+      # richiesta sul lato "il pavimento non si vede bene di lato".
+      Pitch: 0.15
+      Target Frame: base_link
       Value: Orbit (rviz)
       Yaw: 3.14
     Saved: ~
