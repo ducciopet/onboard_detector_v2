@@ -205,13 +205,13 @@ tracker_node:
     # as an ID swap onto a bigger object (wall, vehicle, noisy merged cluster) — modest shrinkage alone is a
     # normal LiDAR-only-outside-FOV artifact (sparsity/self-occlusion), not flagged by this one.
     track_yolo_base_mismatch_thresh: 0.50   # relative growth (vs. the high-water mark) that counts as suspicious — v1: yolo_base_mismatch_thresh
-    # (3) Same outside-FOV high-water mark, but for sustained SHRINKAGE past its own, higher bar (no v1
-    # equivalent) — added after an observed ID swap from a person's track onto a small stationary object outside
-    # FOV, which kept the "person" class for a long time since only growth was ever checked. Higher than (2)'s
-    # own threshold on purpose: an ordinary modest shrink (self-occlusion, sparsity) must stay unflagged, same as
-    # before — only a genuinely drastic, sustained one trips this.
-    track_yolo_base_shrink_thresh: 0.60     # relative shrink (vs. the high-water mark) that counts as suspicious
-    track_max_yolo_base_mismatch_frames: 5  # consecutive suspicious ticks (growth OR shrink, shared counter) before the class is cleared — v1: max_yolo_base_mismatch_frames
+    # Shrink-side trigger, no v1 equivalent — removed once (a live-bag diagnostic traced it clearing "person"
+    # off a track that was still the same real person, just momentarily smaller) then re-added gated on the
+    # YOLO 2D track id instead of running unconditionally: a shrink is only trusted as a real ID swap when
+    # YOLO's own 2D tracker ALSO disagrees (a different/absent track id this tick vs. the one the baseline was
+    # built on) — see tracker_node.cpp's decaySemanticEvidence() for the full account.
+    track_yolo_base_shrink_thresh: 0.60      # relative shrink (vs. the high-water mark) that counts as suspicious, when the YOLO 2D track id isn't a known match
+    track_max_yolo_base_mismatch_frames: 5  # consecutive suspicious (growth or id-mismatched shrink) ticks before the class is cleared — v1: max_yolo_base_mismatch_frames
 
     # Dynamic-class whitelist (v1: yolo_dynamic_classes — see tracker_node.cpp's own semantic_dynamic_classes_
     # comment). Any class YOLO reports is still voted on/displayed (tracker_node.cpp's voteClass()), but only a

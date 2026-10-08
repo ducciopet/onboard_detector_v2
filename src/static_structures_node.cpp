@@ -1493,9 +1493,12 @@ private:
             floor.pose.orientation.z = floor_q.z(); floor.pose.orientation.w = floor_q.w();
             floor.scale.x = 2.0 * lidar_range_x_;
             floor.scale.y = 2.0 * lidar_range_y_;
-            floor.scale.z = 0.02;
+            // 0.02m used to be enough from the default top-down view (a filled rectangle reads fine edge-on
+            // or not), but from a LATERAL view a 2cm slab at this alpha all but disappears — thickened so the
+            // floor stays legible from the side too, still thin enough not to look like a real physical slab.
+            floor.scale.z = 0.08;
             const auto& color = kFloorColors[i % (sizeof(kFloorColors) / sizeof(kFloorColors[0]))];
-            floor.color.r = color[0]; floor.color.g = color[1]; floor.color.b = color[2]; floor.color.a = 0.35f;
+            floor.color.r = color[0]; floor.color.g = color[1]; floor.color.b = color[2]; floor.color.a = 0.55f;
             markers.markers.push_back(floor);
         }
 

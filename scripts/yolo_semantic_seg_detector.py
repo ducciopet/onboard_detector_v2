@@ -907,11 +907,22 @@ class YoloSemanticSegDetector(Node):
             boxes = result.boxes
             # Tracking mode: a box with no confirmed track id yet (first
             # frames before ByteTrack assigns one) is skipped — the id is
-            # what consumers key on. Without tracking the id is just this
-            # frame's own index, NOT a stable identity.
+            # what consumers key on. Without tracking there is no stable
+            # identity at all, so the id published here is NEGATIVE
+            # (-1, -2, ...) rather than this frame's own plain index
+            # (0, 1, ...): still unique WITHIN this one frame (downstream
+            # per-message grouping, e.g. preprocessing_node/
+            # dbscan_detector_node's onLeaves(), still needs that), but a
+            # consumer that treats this as a cross-frame PERSISTENT
+            # identity (tracker_node's decaySemanticEvidence(), gating a
+            # shrink on whether the YOLO 2D track id matches) sees a
+            # negative value and correctly refuses to trust it as a known
+            # id — a positive-looking per-frame index would otherwise be
+            # silently indistinguishable from a real ByteTrack id to code
+            # that never learns detection_enable_tracking's own value.
             if boxes is not None and len(boxes) > 0 and not (self.detection_enable_tracking and boxes.id is None):
                 ids = (boxes.id.cpu().numpy().astype(np.int64) if self.detection_enable_tracking
-                       else np.arange(len(boxes), dtype=np.int64))
+                       else -(np.arange(len(boxes), dtype=np.int64) + 1))
                 cls_ids = boxes.cls.cpu().numpy().astype(np.int64)
                 confs = boxes.conf.cpu().numpy()
                 xyxy = boxes.xyxy.cpu().numpy() * float(scale)

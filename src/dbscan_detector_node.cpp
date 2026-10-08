@@ -67,6 +67,7 @@ struct SourceResult {
     std::vector<Obb> boxes;
     std::vector<std::vector<int>> box_points;   // indices into pts of each kept box's cluster
     std::vector<std::string> box_class;         // YOLO class name per box, only set for "<camera>_yolo" leaf sources (else empty)
+    std::vector<int> box_track_id;               // YOLO 2D (ByteTrack) track id per box, only set for "<camera>_yolo" leaf sources (else -1) — see onLeaves()'s own comment on why this used to be discarded
     std::vector<Eigen::Vector3f> pts;           // all input points
     std::vector<int> point_cluster;             // cluster index per point, -1 = none/dropped
     size_t num_points = 0;
@@ -199,6 +200,20 @@ public:
         // often only reach ~0.15-0.3 — a real competitor's IoU and the true match's can both be modest in that
         // range without the pairing actually being ambiguous.
         yolo_refine_min_iou_margin_ = declare_parameter<double>("yolo_refine_min_iou_margin", 0.05);
+        // Retention-fraction guard (v1 has no cut at all, so no direct equivalent — but it carries the same
+        // spirit as dynamicDetector.cpp's own yoloPointFractionThresh_/sparseLargeBox checks: don't trust a
+        // match built from only a SLIVER of the evidence). The cut below keeps only the fused object's own
+        // points that fall inside the leaf's rotated box; camera_min_points_ is an ABSOLUTE floor on that
+        // "inside" count, with no check on how much of the PRE-CUT object it actually represents. A fused
+        // object with plenty of points pre-cut can still pass that absolute floor while keeping only a thin,
+        // barely-representative corner of itself — observed on a live bag (negative-X "person" misclassification
+        // report): a healthy ~200-point fused object intermittently produced sub-20-point "inside" sets a few
+        // ticks in a row, each one individually clearing camera_min_points_, that the tracker then received as
+        // that tick's own detection size — this is what let it "follow" a nearby, mostly-unrelated sliver of
+        // points instead of its own well-formed object. Requiring a minimum RETENTION fraction in addition to
+        // the absolute floor rejects a marginal/coincidental overlap outright rather than accepting it as a
+        // valid, if small, match.
+        yolo_refine_min_retention_ = declare_parameter<double>("yolo_refine_min_retention", 0.35);
         yolo_keep_rest_ = declare_parameter<bool>("yolo_refine_keep_rest", true);
         leaves_enabled_ = declare_parameter<bool>("leaves_enabled", true);
         leaves_topic_template_ = declare_parameter<std::string>("leaves_topic_template", "/onboard_detector_v2/{camera}/semantic_leaves");
@@ -599,9 +614,13 @@ private:
         cam.leaves_seen = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
         auto res = std::make_shared<SourceResult>();
         res->valid = true;
-        // by_id groups points by the ORIGINAL detection's track id — a purely local, same-message key (see the
-        // file header): it only needs to be consistent within this one PointCloud2, never across cameras or
-        // ticks, so there is no re-identification problem to solve here. class_idx travels alongside as the
+        // by_id groups points by the ORIGINAL detection's track id. This file only ever needed it to be
+        // consistent WITHIN one PointCloud2 (grouping points into one leaf per id) — but the value itself,
+        // inherited from preprocessing_node's own Leaf.id (which is the YOLO 2D detection's own persistent
+        // ByteTrack id, "d.id", parsed as a number — see publishSemanticLeaves's own box/mask branches), is
+        // genuinely stable ACROSS ticks for as long as YOLO's own 2D tracker keeps that identity. Carried into
+        // box_track_id below (previously discarded here) so tracker_node can use 2D-track continuity as a
+        // cross-check — see decaySemanticEvidence()'s own comment on why. class_idx travels alongside as the
         // same detection's class (an index into class_names_, -1 = unknown) — one value per id, read off its
         // first point since every point of one leaf shares its source detection's class by construction.
         std::map<int, std::vector<int>> by_id;
@@ -629,6 +648,7 @@ private:
             res->box_points.push_back(idx);
             const int cidx = class_by_id.at(id);
             res->box_class.push_back(cidx >= 0 && cidx < static_cast<int>(class_names_.size()) ? class_names_[static_cast<size_t>(cidx)] : "");
+            res->box_track_id.push_back(id);
         }
         res->num_clusters = res->boxes.size();
         const std::string name = cam.name + "_yolo";
@@ -715,6 +735,8 @@ private:
                                     // empty — "unknown class name", e.g. not in class_names_ — that is different
                                     // from "never refined at all", which is what gates re-use below)
         std::string yolo_class;
+        int yolo_track_id = -1;    // the refining leaf's own YOLO 2D (ByteTrack) track id, -1 = never refined —
+                                    // see onLeaves()'s own comment on why this now survives past this file
     };
 
     std::string maskName(unsigned mask) const {
@@ -948,11 +970,36 @@ private:
         // added, which is what made the boxes 2x too big when they were fused as another source.
         size_t refined = 0;
         if (yolo_refine_enabled_) {
+            // Flat list of every (camera, leaf) pair this tick, to be processed in GLOBAL best-match-first
+            // order rather than fixed camera-list-then-leaf-index order (not a v1 concern — v1 never claims a
+            // fused object at all, so it has no equivalent ordering problem). The loop below claims a fused
+            // object (fused[fi].yolo_refined = true) the moment one leaf accepts it, so whichever leaf is
+            // processed FIRST gets first pick — with the old fixed order, a mediocre match (just above
+            // yolo_refine_min_iou_) for leaf A processed early could claim an object that leaf B, processed
+            // later, would have matched far more convincingly (much higher IoU) — leaving B to settle for its
+            // own second-best candidate, or nothing. Ranking every leaf by its own best achievable IoU BEFORE
+            // any claiming starts, and processing strongest-match-first, means the leaf with the clearest claim
+            // on an object always gets it, independent of which camera or array position it happened to be in.
+            struct LeafRef { size_t k, li; double rank_iou; };
+            std::vector<LeafRef> leaf_refs;
             for (size_t k = 0; k < camera_names_.size(); ++k) {
                 const auto ly = pending_.cams.find(camera_names_[k] + "_yolo");
                 if (ly == pending_.cams.end()) continue;
                 const SourceResult& leaves = *ly->second;
                 for (size_t li = 0; li < leaves.boxes.size(); ++li) {
+                    double rank_iou = -1.0;
+                    for (const auto& f : fused) rank_iou = std::max(rank_iou, obf::obbOverlap3D(leaves.boxes[li], f.box, 0.0).iou);
+                    leaf_refs.push_back({k, li, rank_iou});
+                }
+            }
+            std::stable_sort(leaf_refs.begin(), leaf_refs.end(),
+                [](const LeafRef& a, const LeafRef& b) { return a.rank_iou > b.rank_iou; });
+
+            for (const auto& ref : leaf_refs) {
+                const size_t k = ref.k, li = ref.li;
+                {
+                    const auto ly = pending_.cams.find(camera_names_[k] + "_yolo");
+                    const SourceResult& leaves = *ly->second;
                     const Obb& lb = leaves.boxes[li];
                     int best = -1;
                     double best_iou = -1.0, second_iou = -1.0;
@@ -1029,7 +1076,20 @@ private:
                         (std::abs(d.x()) <= lb.size.x() * 0.5 + yolo_refine_margin_ && std::abs(d.y()) <= lb.size.y() * 0.5 + yolo_refine_margin_ &&
                          std::abs(d.z()) <= lb.size.z() * 0.5 + yolo_refine_margin_ ? inside : rest).push_back(q);
                     }
-                    if (static_cast<int>(inside.size()) < camera_min_points_) continue;
+                    // Absolute floor (camera_min_points_) AND relative retention floor (see
+                    // yolo_refine_min_retention_'s own comment) — a cut that keeps few points outright, or
+                    // keeps plenty in absolute terms but only a thin sliver of what the fused object actually
+                    // was pre-cut, is rejected the same way: skip this tick, never publish a marginal match.
+                    const double retention = o.pts.empty() ? 0.0 :
+                        static_cast<double>(inside.size()) / static_cast<double>(o.pts.size());
+                    if (static_cast<int>(inside.size()) < camera_min_points_ || retention < yolo_refine_min_retention_) {
+                        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                            "yolo_refine: skipped low-retention cut (%s leaf %zu class=%s, inside=%zu rest=%zu "
+                            "of %zu pre-cut, retention=%.0f%% < %.0f%%)", camera_names_[k].c_str(), li,
+                            leaves.box_class[li].c_str(), inside.size(), rest.size(), o.pts.size(),
+                            retention * 100.0, yolo_refine_min_retention_ * 100.0);
+                        continue;
+                    }
                     std::vector<int> iidx(inside.size());
                     std::iota(iidx.begin(), iidx.end(), 0);
                     Eigen::Vector3d ic = Eigen::Vector3d::Zero();
@@ -1038,16 +1098,28 @@ private:
                     Obb pbox = obf::computeObb(inside, iidx, yaw_only_, yaw_only_ ? localUp(floor_planes_, ic) : Eigen::Vector3d::UnitZ());
                     if (!boxOk(pbox, inside)) continue;
                     const unsigned omask = o.mask;
-                    // the remainder, re-clustered with the LiDAR's own radii
+                    // Re-clustered with the LiDAR's own radii/min-points — correct for any object that went
+                    // through mergeGroups (Phase 1 mutual-match, split-residual, or Phase 2 nested-absorb, all
+                    // three call the SAME lambda): its points are already range-banded voxel-centroided to
+                    // LiDAR density at merge time (see mergeGroups's own comment and the file header), so
+                    // lidar_eps_ matches what's actually in `rest` regardless of which sources contributed.
+                    // The one case that's NOT true: omask has exactly one bit set and it ISN'T LiDAR's (bit 0)
+                    // — a camera-only object that was never merged with anything "passes through untouched"
+                    // (same file-header comment) at the depth camera's own, denser native resolution, so
+                    // lidar_eps_/lidar_min_points_ would be too tight for it (and camera_eps_/camera_min_points_
+                    // already exist for exactly this purpose, used elsewhere for camera-only clustering).
+                    const bool cameraOnlySingleSource = omask != 0 && (omask & (omask - 1)) == 0 && (omask & 1u) == 0;
+                    const EpsRange& rest_eps = cameraOnlySingleSource ? camera_eps_ : lidar_eps_;
+                    const int rest_min_points = cameraOnlySingleSource ? camera_min_points_ : lidar_min_points_;
                     std::vector<Fused> remainder;
-                    if (yolo_keep_rest_ && static_cast<int>(rest.size()) >= lidar_min_points_) {
+                    if (yolo_keep_rest_ && static_cast<int>(rest.size()) >= rest_min_points) {
                         std::vector<float> re(rest.size()), rez(rest.size());
                         for (size_t q = 0; q < rest.size(); ++q) {
                             const double r = (rest[q].cast<double>() - origin_).norm();
-                            re[q] = lidar_eps_.at(r);
-                            rez[q] = lidar_eps_.atZ(r);
+                            re[q] = rest_eps.at(r);
+                            rez[q] = rest_eps.atZ(r);
                         }
-                        for (const auto& comp : obf::dbscanGrid(rest, re, rez, lidar_min_points_)) {
+                        for (const auto& comp : obf::dbscanGrid(rest, re, rez, rest_min_points)) {
                             std::vector<Eigen::Vector3f> cp;
                             for (int q : comp) cp.push_back(rest[static_cast<size_t>(q)]);
                             std::vector<int> cidx(cp.size());
@@ -1063,6 +1135,7 @@ private:
                     o.pts = std::move(inside);
                     o.yolo_refined = true;
                     o.yolo_class = leaves.box_class[li];
+                    o.yolo_track_id = leaves.box_track_id[li];
                     for (auto& rr : remainder) fused.push_back(std::move(rr));
                     ++refined;
                 }
@@ -1090,7 +1163,9 @@ private:
             if (fused[i].yolo_refined && !fused[i].yolo_class.empty()) {
                 vision_msgs::msg::ObjectHypothesisWithPose y;
                 y.hypothesis.class_id = fused[i].yolo_class;  // this tick's YOLO class for this object (see tracker_node for the per-track vote across ticks)
-                y.hypothesis.score = 1.0;
+                // Repurposed from a constant 1.0 (unread anywhere) to the refining leaf's own YOLO 2D track id —
+                // see tracker_node.cpp's detectionYoloTrackId()/decaySemanticEvidence() for the consumer.
+                y.hypothesis.score = static_cast<double>(fused[i].yolo_track_id);
                 d.results.push_back(y);
             }
             arr.detections.push_back(d);
@@ -1245,6 +1320,7 @@ private:
     SplitParams split_;
     bool yolo_refine_enabled_{true}, yolo_keep_rest_{true};
     double yolo_refine_min_iou_{0.12}, yolo_refine_margin_{0.10}, yolo_refine_min_iou_margin_{0.05};
+    double yolo_refine_min_retention_{0.35};
     bool leaves_enabled_{true};
     std::string leaves_topic_template_;
     std::vector<std::string> class_names_;
